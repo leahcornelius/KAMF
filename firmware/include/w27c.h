@@ -1,0 +1,6 @@
+// Programing mode
+#define PROGRAM_CE_PULSE_WIDTH 100 // uS
+#define ERASE_CE_PULSE_WIDTH 100000 
+#define READ_CE_PULSE_WIDTH 2
+#define PROGRAM_ADDRESS_HOLD 5
+#define ERASE_ADDRESS_HOLD 5

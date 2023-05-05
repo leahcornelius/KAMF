@@ -30,3 +30,12 @@
 *.exe
 *.out
 *.app
+
+# PlatformIO
+.pioenvs
+.pio
+
+.vscode
+
+*.hex
+*.bin

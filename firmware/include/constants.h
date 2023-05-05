@@ -1,0 +1,4 @@
+#define LITTLE_ENDIAN 0
+#define BIG_ENDIAN 1
+
+#define HIGH_VOLTAGE 2
