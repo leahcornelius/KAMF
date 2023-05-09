@@ -19,11 +19,12 @@ import argparse
 from intelhex import IntelHex
 
 # Constants/ config
-BAUD_RATE = 115200
-VERBOSE_WRITE = False
-VERBOSE_READ = False
+BAUD_RATE = 9600
+VERBOSE_WRITE = True
+VERBOSE_READ = True
 SKIP_VERIFY = False
 SKIP_WRITE = False
+SKIP_ERASE = False
 
 # Global vars
 file_name = None
@@ -37,7 +38,7 @@ serial_port = None
 serial_connection = None
 serial_device_id = None
 
-sram_size = 2048
+sram_size = 65536  # bytes
 sram_word_size = 8  # bits
 address_offset = 0
 
@@ -93,9 +94,9 @@ def read_byte(address):
         raise ValueError("Address out of range: {} (decimal: {}) [{} -> {}]".format(
             hex(address), address, 0, hex(sram_size-1)))
 
-    command = "READ {}\n".format(address)
+    command = "r {}\r".format(address)
     serial_connection.write(command.encode())
-    response = serial_connection.readline().decode()
+    _, response = read_line()
     if (VERBOSE_READ):
         print("({}): {}".format(serial_device_id, response), end='')
 
@@ -124,16 +125,13 @@ def write_byte(address, data):
         raise ValueError("Data out of range: {} (decimal: {}) [{} -> {}]".format(
             hex(data), data, 0, hex(max_word_value())))
 
-    command = "WRITE {} {}\n".format(address, data)
+    command = "p {} {}\r".format(address, data)
     serial_connection.write(command.encode())
-    response = serial_connection.readline().decode()
+    _, response = read_line()
     if (VERBOSE_WRITE):
         print("({}): {}".format(serial_device_id, response))
 
-    if "ACK;" not in response:
-        raise ValueError("Write failed: {}".format(response), end='')
-
-    response_address = int(response.split(':')[0].split(";")[-1].strip(), 16)
+    response_address = int(response.split(':')[0].strip(), 16)
     response_data = int(response.split(':')[1].strip(), 16)
     if (response_address != address):
         raise ValueError("Address mismatch: expected {} but got {}".format(
@@ -147,12 +145,30 @@ def write_byte(address, data):
 
 # Reads the entire memory and saves it to a file
 
+def start_read_cycle():
+    serial_connection.write("br\r".encode())
+    print("SRR: {}".format(read_line()))
+
+def end_read_cycle():
+    serial_connection.write("er\r".encode())
+    print("ERR: {}".format(read_line()))
+    
+
+def start_write_cycle():
+    serial_connection.write("bp\r".encode())
+    print("SWR: {}".format(read_line()))
+    
+
+def end_write_cycle():
+    serial_connection.write("ep\r".encode())
+    print("EWR: {}".format(read_line()))
 
 def dump_memory():
     global memory_dump_path
     if not memory_dump_path:
         raise ValueError("No memory dump path specified")
 
+    start_read_cycle()
     print("Dumping memory to {}".format(memory_dump_path))
     printProgressBar(0, sram_size, prefix='Progress:',
                      suffix='Complete', length=50)
@@ -162,8 +178,22 @@ def dump_memory():
             memory_dump_file.write(data.to_bytes(1, byteorder='big'))
             printProgressBar(address + 1, sram_size,
                              prefix='Progress:', suffix='Complete', length=50)
+            
+    end_read_cycle()
 
     print("Memory dump complete")
+
+def erase_memory():
+    sel = input("Ensure 14v is present on Vpp and press y to continue (or any other key to abort):")
+    if (sel == 'y'):
+        print("Erasing memory...")
+        serial_connection.write("e\r".encode())
+        print(read_line())
+        serial_connection.write("y".encode())
+        print(read_line())
+
+
+        print("Memory erase complete")
 
 
 def flash_memory():
@@ -173,6 +203,7 @@ def flash_memory():
         print("Flashing memory...")
         printProgressBar(0, sram_size, prefix='Progress:',
                         suffix='Complete', length=50)
+        start_write_cycle()
         sram_address = 0
         for address in file_content:
             if (address < address_offset):
@@ -182,6 +213,7 @@ def flash_memory():
             sram_address += 1
             printProgressBar(sram_address, sram_size,
                             prefix='Progress:', suffix='Complete', length=50)
+        end_write_cycle()
         print("Memory flash complete")
     else:
         print("Skipping flash")
@@ -191,6 +223,7 @@ def flash_memory():
         printProgressBar(0, sram_size,
                          prefix='Progress:', suffix='Complete', length=50)
         sram_address = 0
+        start_read_cycle()
         for address in file_content:
             if (address < address_offset):
                 continue
@@ -206,9 +239,21 @@ def flash_memory():
                                  prefix='Progress:', suffix='Complete', length=50)
 
             sram_address += 1
+        end_read_cycle()
         print("Memory verification complete")
     else:
         print("Skipping verify")
+
+def read_line():
+    global serial_device_id
+    while (serial_connection.in_waiting == 0):
+        pass
+    response = serial_connection.readline().decode()
+    data = response.strip()
+    if VERBOSE_READ:
+
+        print("{}: {}".format(serial_device_id, data))
+    return serial_device_id, data
 
 def main():
     global serial_connection, file_stream, file_content, address_offset, dump_existing_values, memory_dump_path, serial_device_id, serial_port, file_name
@@ -225,13 +270,16 @@ def main():
 
     print("Opening serial connection...")
     try:
-        serial_connection = serial.Serial(serial_port, BAUD_RATE, timeout=5)
+        serial_device_id = serial_port.split('/')[-1]
+
         print("Opened serial connection to {}".format(serial_port))
+        serial_connection = serial.Serial(serial_port, BAUD_RATE, timeout=1)
         # Wait for a RTS signal
         serial_read_line = ""
-        while ("RTS" not in serial_read_line):
-            serial_read_line = serial_connection.readline().decode("utf-8")
-            print("({}): {} ".format(serial_device_id, serial_read_line), end="")
+        while ("rtr" not in serial_read_line):
+            if (serial_connection.in_waiting > 0):
+                serial_read_line = serial_connection.readline().decode("utf-8")
+                print("({}): {} ".format(serial_device_id, serial_read_line), end='')
         print("Serial connection opened successfully")
     except Exception as e:
         print("Failed to open serial connection:")
@@ -240,7 +288,15 @@ def main():
 
     if (dump_existing_values):
         dump_memory()
+    else:
+        print("Skipping memory dump")
+    
 
+    if (not SKIP_ERASE):
+        erase_memory()
+    else:
+        print("Skipping memory erase")
+    
     flash_memory()
     print("Goodbye!")
 
@@ -256,6 +312,7 @@ if __name__ == "__main__":
     parser.add_argument('--no-write', help='Disables writing to the chip (will only verify existing values)', action='store_true')
     parser.add_argument('--verbose', help='Enables verbose output', action='store_true')
     parser.add_argument('--skip-verify', help='Disables post-write verifcation', action='store_true')
+    parser.add_argument('--skip-erase', help='Disables memory erase', action='store_true')
     args = parser.parse_args()
     serial_port = args.serial_port
     file_name = args.file_name
@@ -273,6 +330,7 @@ if __name__ == "__main__":
     
     SKIP_VERIFY = args.skip_verify
     SKIP_WRITE = args.no_write
+    SKIP_ERASE = args.skip_erase
     VERBOSE_WRITE = args.verbose
     VERBOSE_READ = args.verbose
         
