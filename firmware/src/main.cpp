@@ -440,7 +440,7 @@ void cmd_program_test_pattern(MyCommandParser::Argument *args, char *response)
       cmd_data = pattern_generator(cmd_address);
       write_byte(cmd_address, cmd_data);
      // delayMicroseconds(3);
-      if (cmd_address % 0x01 == 0)
+      if (cmd_address % 0x1000 == 0)
       {
         Serial.print("(WP): ");
         print_hex(cmd_address);
@@ -476,7 +476,7 @@ void cmd_program_test_pattern(MyCommandParser::Argument *args, char *response)
         Serial.println();
         failures += 1;
       }
-      else if (cmd_address % 0x01 == 0)
+      else if (cmd_address % 0x1000 == 0)
       {
         Serial.print("(PV): ");
         print_hex(cmd_address);
@@ -509,7 +509,7 @@ void cmd_program_test_pattern(MyCommandParser::Argument *args, char *response)
         Serial.println();
         failures += 1;
       }
-      else if (cmd_address % 0x10 == 0)
+      else if (cmd_address % 0x1000 == 0)
       {
         Serial.print("(RB): ");
         print_hex(cmd_address);
