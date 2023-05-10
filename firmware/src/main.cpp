@@ -45,7 +45,8 @@ char response[MyCommandParser::MAX_RESPONSE_SIZE];
 int state = 0;
 #endif
 
-void set_address_register_state(bool state) {
+void set_address_register_state(bool state)
+{
   digitalWrite(SR_OUTPUT_ENABLE, state ? SR_OE_ENABLE_LEVEL : !SR_OE_ENABLE_LEVEL);
 }
 
@@ -93,23 +94,27 @@ void set_data(byte data)
   }
 }
 
-
-void writeAddress(uint16_t address) {
+void set_address(uint16_t address)
+{
   digitalWrite(SR_LATCH, LOW);
+  // digitalWrite(SR_CLOCK, LOW);
   shiftOut(SR_DATA, SR_CLOCK, MSBFIRST, address >> 8);
+  // digitalWrite(SR_CLOCK, LOW);
   shiftOut(SR_DATA, SR_CLOCK, MSBFIRST, address);
   digitalWrite(SR_LATCH, HIGH);
 }
 
-void set_address(uint16_t address)
+void reset_shift_register()
 {
-  uint16_t reordered_address = 0;
-  for (int i = 0; i < ADDRESS_WIDTH; i++)
-  {
-    bit = ADDRESS_ORDER[i];
-    reordered_address |= ((address >> bit) & 1) << i;
-  }
-  writeAddress(reordered_address);
+  set_address_register_state(true);
+
+  digitalWrite(SR_LATCH, LOW);
+  digitalWrite(SR_MASTER_RESET, LOW);
+  delay(1);
+  digitalWrite(SR_MASTER_RESET, HIGH);
+  digitalWrite(SR_LATCH, HIGH);
+
+  set_address_register_state(false);
 }
 
 void enable_memory(bool enabled)
@@ -189,6 +194,7 @@ void start_program_cycle()
   _set_data_bus_mode(false);
   set_OE_pin_state(HIGH_VOLTAGE);
   set_A9_pin_state(LOW);
+  set_address_register_state(true);
 }
 
 void end_program_cycle()
@@ -205,6 +211,7 @@ void end_program_cycle()
   set_A9_pin_state(LOW);
   set_OE_pin_state(HIGH);
   _set_data_bus_mode(true);
+  set_address_register_state(false);
 }
 
 void init_pins()
@@ -217,6 +224,7 @@ void init_pins()
   pinMode(SR_DATA, OUTPUT);
   pinMode(SR_LATCH, OUTPUT);
   pinMode(SR_OUTPUT_ENABLE, OUTPUT);
+  pinMode(SR_MASTER_RESET, OUTPUT);
   for (int i = 0; i < WORD_SIZE; i++)
   {
     // Put the data pins into INPUT mode by default (high impedance, prevents bus contention during setup)
@@ -229,6 +237,7 @@ void init_pins()
   digitalWrite(OE_LOGIC_VOLTAGE_PIN, HIGH);
   digitalWrite(A9_HV_PIN, !HV_ENABLE_LEVEL);
   digitalWrite(SR_OUTPUT_ENABLE, !SR_OE_ENABLE_LEVEL);
+  digitalWrite(SR_MASTER_RESET, HIGH);
 }
 
 void write_byte(uint16_t address, byte data)
@@ -242,9 +251,9 @@ void write_byte(uint16_t address, byte data)
   }
 #endif
   set_address(address);
-  set_address_register_state(true);
   set_data(data);
   _write_data_bus();
+  delayMicroseconds(3);
   enable_memory(true);
 #ifdef SLOW_MODE
   delay(PROGRAM_CE_PULSE_WIDTH);
@@ -252,7 +261,7 @@ void write_byte(uint16_t address, byte data)
   delayMicroseconds(PROGRAM_CE_PULSE_WIDTH);
 #endif
   enable_memory(false);
-  set_address_register_state(false);
+  delayMicroseconds(5); // Tdh
 }
 
 void read_byte(uint16_t address)
@@ -281,7 +290,7 @@ void read_byte(uint16_t address)
   _read_data_bus();
   enable_memory(false);
   set_OE_pin_state(HIGH);
-  set_address_register_state(false);
+ // set_address_register_state(false);
 }
 
 void print_hex(uint16_t number)
@@ -306,6 +315,7 @@ void read_byte_erase_verify(uint16_t address)
 #endif
   _read_data_bus();
   set_OE_pin_state(HIGH);
+  NOP;
 }
 
 bool erase_chip(int max_attempts)
@@ -341,7 +351,7 @@ bool erase_chip(int max_attempts)
     set_OE_pin_state(HIGH);
     set_A9_pin_state(LOW);
     enable_memory(true);
-    delayMicroseconds(ERASE_COMMENCE_VERIFY_DELAY);
+    delay(ERASE_COMMENCE_VERIFY_DELAY);
     Serial.println("Verifying erase");
     cmd_address = 0;
     bool failed = false;
@@ -355,6 +365,7 @@ bool erase_chip(int max_attempts)
         print_hex(cmd_address);
         Serial.print(" read ");
         print_hex(cmd_data);
+        Serial.println();
         failed = true;
         break;
       }
@@ -403,6 +414,10 @@ bool erase_chip(int max_attempts)
   return erase_verified;
 }
 
+byte pattern_generator(uint16_t address) {
+  return 0x01; // NOP on the 680x
+}
+
 void cmd_program_test_pattern(MyCommandParser::Argument *args, char *response)
 {
   // Creates a "test pattern" (binary upcount) up to the address specifed by argument 0
@@ -422,9 +437,10 @@ void cmd_program_test_pattern(MyCommandParser::Argument *args, char *response)
     delay(1000);
     for (cmd_address = 0; cmd_address < end_address; cmd_address++)
     {
-      cmd_data = cmd_address; // Will overflow back to 0 at 255 (expected behavour)
+      cmd_data = pattern_generator(cmd_address);
       write_byte(cmd_address, cmd_data);
-      if (cmd_address % 0x0100 == 0)
+     // delayMicroseconds(3);
+      if (cmd_address % 0x01 == 0)
       {
         Serial.print("(WP): ");
         print_hex(cmd_address);
@@ -434,20 +450,19 @@ void cmd_program_test_pattern(MyCommandParser::Argument *args, char *response)
     end_program_cycle();
     set_OE_pin_state(LOW);
     Serial.println("Finished writing pattern, starting program-verify...");
-    delay(1);
+    delay(10);
     _set_data_bus_mode(true);
     set_address(0);
     set_address_register_state(true);
-
     enable_memory(true);
 
     failures = 0;
     for (cmd_address = 0; cmd_address < end_address; cmd_address++)
     {
-      cmd_data = cmd_address; // Will overflow back to 0 at 255 (expected behavour)
+      cmd_data = pattern_generator(cmd_address);
       set_address(cmd_address);
       // delay 62.5ns * 2
-      delay(100);
+      delayMicroseconds(10);
       _read_data_bus();
       read_back_data = parse_data_bits();
       if (cmd_data != read_back_data)
@@ -461,7 +476,7 @@ void cmd_program_test_pattern(MyCommandParser::Argument *args, char *response)
         Serial.println();
         failures += 1;
       }
-      else if (cmd_address % 0x0100 == 0)
+      else if (cmd_address % 0x01 == 0)
       {
         Serial.print("(PV): ");
         print_hex(cmd_address);
@@ -480,7 +495,7 @@ void cmd_program_test_pattern(MyCommandParser::Argument *args, char *response)
     failures = 0;
     for (cmd_address = 0; cmd_address < end_address; cmd_address++)
     {
-      cmd_data = cmd_address; // Will overflow back to 0 at 255 (expected behavour)
+      cmd_data = pattern_generator(cmd_address);
       read_byte(cmd_address);
       read_back_data = parse_data_bits();
       if (cmd_data != read_back_data)
@@ -494,7 +509,7 @@ void cmd_program_test_pattern(MyCommandParser::Argument *args, char *response)
         Serial.println();
         failures += 1;
       }
-      else if (cmd_address % 0x0100 == 0)
+      else if (cmd_address % 0x10 == 0)
       {
         Serial.print("(RB): ");
         print_hex(cmd_address);
@@ -577,6 +592,8 @@ void cmd_end_program(MyCommandParser::Argument *args, char *response)
 void setup()
 {
   init_pins();
+  reset_shift_register();
+  delay(1);
   Serial.begin(SERIAL_BAUD_RATE);
   Serial.println(VERSION_STRING);
   Serial.println("rtr");
@@ -592,11 +609,8 @@ void setup()
   parser.registerCommand("wp", "u", cmd_program_test_pattern);
 }
 
-
-uint16_t count = 0;
 void loop()
 {
-  /*
   if (Serial.available())
   {
     serial_input_buffer[serial_input_buffer_index] = Serial.read();
@@ -625,8 +639,5 @@ void loop()
     {
       serial_input_buffer_index++;
     }
-  }*/
-  count += 1;
-  set_address(count);
-  delay(100);
+  }
 }
