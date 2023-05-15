@@ -32,7 +32,7 @@ const int DATA_BUS_PINS[WORD_SIZE] = {12, 11, 10, 9, 8, 7, 6, 5}; // 0 is LSB, 7
 // #define BULK_TRANSFER_CODE // Include the code from transfer.cpp
 
 // Meta settings
-#define VERSION "1.0.1"
+#define VERSION "2.0.0"
 #define FIRMWARE_NAME "KAMF"
 #define DEVICE_ID "MVP"
 #define VERSION_STRING FIRMWARE_NAME " v" VERSION
@@ -41,3 +41,11 @@ const int DATA_BUS_PINS[WORD_SIZE] = {12, 11, 10, 9, 8, 7, 6, 5}; // 0 is LSB, 7
 #define HV_ENABLE_LEVEL HIGH         // Active high
 #define MEMORY_CHIP_SELECT_LEVEL LOW // Active low
 #endif                               // CONFIG_H
+
+#define DEVICE_READY_MESSAGE "RTR"
+#define ACK_MESSAGE  "ACK"
+#define NACK_MESSAGE "NCK"
+#define SEND_DATA_MESSAGE "SD"
+#define READ_DATA_MESSAGE "RD"
+#define END_DATA_MESSAGE "ED"
+#define ABORT_ACK_MESSAGE "ABT"

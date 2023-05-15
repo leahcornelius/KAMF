@@ -19,6 +19,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 #include <Arduino.h>
+#include <avr/wdt.h>
 #include <CommandParser.h>
 
 #include <constants.h>
@@ -290,7 +291,7 @@ void read_byte(uint16_t address)
   _read_data_bus();
   enable_memory(false);
   set_OE_pin_state(HIGH);
- // set_address_register_state(false);
+  // set_address_register_state(false);
 }
 
 void print_hex(uint16_t number)
@@ -414,8 +415,137 @@ bool erase_chip(int max_attempts)
   return erase_verified;
 }
 
-byte pattern_generator(uint16_t address) {
-  return 0x01; // NOP on the 680x
+byte pattern_generator(uint16_t address)
+{
+  return (address >> 8) & 0xFF;
+}
+
+void cmd_set_mode(MyCommandParser::Argument *args, char *response)
+{
+  uint8_t mode = args[0].asInt64;
+  if (mode == 0)
+  {
+    start_read_cycle();
+  }
+  else if (mode == 1)
+  {
+    end_read_cycle();
+  }
+  else if (mode == 2)
+  {
+    start_program_cycle();
+  }
+  else if (mode == 3)
+  {
+    end_program_cycle();
+  }
+  else
+  {
+    strcpy(response, NACK_MESSAGE);
+    return;
+  }
+  strcpy(response, ACK_MESSAGE);
+}
+
+void cmd_dump_contents(MyCommandParser::Argument *args, char *response)
+{
+  uint16_t start_address = args[0].asInt64;
+  uint16_t end_address = args[1].asInt64;
+  if (start_address > end_address || end_address > MEMORY_SIZE || start_address > MEMORY_SIZE)
+  {
+    strcpy(response, NACK_MESSAGE);
+    return;
+  }
+  start_read_cycle();
+  Serial.println(READ_DATA_MESSAGE);
+  for (cmd_address = start_address; cmd_address < end_address; cmd_address++)
+  {
+    read_byte(cmd_address);
+    cmd_data = parse_data_bits();
+    Serial.write(cmd_data);
+    if (cmd_address % 128 == 0)
+    {
+      if (Serial.available())
+      {
+        // If there is, check if it is a 'q' character
+        if (Serial.read() == 'q')
+        {
+          // If it is, cancel the dump
+          Serial.println();
+          Serial.println(ABORT_ACK_MESSAGE);
+          strcpy(response, DEVICE_READY_MESSAGE);
+          end_read_cycle();
+          return;
+        }
+      }
+    }
+  }
+  Serial.println();
+  Serial.println();
+  Serial.println();
+  Serial.println();
+  Serial.println(END_DATA_MESSAGE);
+  delay(10);
+  end_read_cycle();
+  strcpy(response, DEVICE_READY_MESSAGE);
+}
+
+void write_block(uint16_t address, uint8_t *buffer, uint8_t length) {
+  for (uint8_t i = 0; i < length; i++) {
+    write_byte(address + i, buffer[i]);
+  }
+}
+
+void cmd_program_block(MyCommandParser::Argument *args, char *response)
+{
+  // Provided with a start and end address, continually read a single byte, write
+  // it to the current cmd_address and increment cmd_address
+  // Once we reach the end address, read the data back and send over serial
+  start_program_cycle();
+  Serial.println(SEND_DATA_MESSAGE);
+  uint16_t start_address = args[0].asInt64;
+  uint16_t end_address = args[1].asInt64;
+  uint8_t buffer[64] = {0};
+  for (cmd_address = start_address; cmd_address < end_address; cmd_address++)
+  {
+    while (!Serial.available())
+    {
+    } // Wait for data
+    buffer[cmd_address % 64] = Serial.read();
+    if (cmd_address % 64 == 63)
+    {
+      write_block(cmd_address - 63, buffer, 64);
+      Serial.print(".");
+    } else if (cmd_address == end_address - 1) {
+      write_block(cmd_address - (cmd_address % 64), buffer, cmd_address % 64 + 1);
+      Serial.println(".");
+      break;
+    }
+  }
+  delay(10);
+  end_program_cycle();
+  start_read_cycle();
+  Serial.println();
+  Serial.println(ACK_MESSAGE);
+  while (!Serial.available())
+  {
+  } // Wait for data
+  Serial.read();
+  Serial.println(READ_DATA_MESSAGE);
+  delay(1);
+  byte readback_data = 0;
+
+  for (cmd_address = start_address; cmd_address < end_address; cmd_address++)
+  {
+    read_byte(cmd_address);
+    readback_data = parse_data_bits();
+    Serial.write(readback_data);
+  }
+  delay(1);
+  Serial.println();
+  Serial.println(END_DATA_MESSAGE);
+  end_read_cycle();
+  strcpy(response, DEVICE_READY_MESSAGE);
 }
 
 void cmd_program_test_pattern(MyCommandParser::Argument *args, char *response)
@@ -439,7 +569,7 @@ void cmd_program_test_pattern(MyCommandParser::Argument *args, char *response)
     {
       cmd_data = pattern_generator(cmd_address);
       write_byte(cmd_address, cmd_data);
-     // delayMicroseconds(3);
+      // delayMicroseconds(3);
       if (cmd_address % 0x1000 == 0)
       {
         Serial.print("(WP): ");
@@ -537,56 +667,27 @@ void cmd_erase(MyCommandParser::Argument *args, char *response)
   }
   if (Serial.read() == 'y')
   {
-    strcpy(response, erase_chip(10) ? "Erase complete" : "Erase Failed");
+    strcpy(response, erase_chip(10) ? ACK_MESSAGE : NACK_MESSAGE);
   }
   else
   {
-    strcpy(response, "erase cancelled");
+    strcpy(response, NACK_MESSAGE);
   }
-}
-
-void cmd_begin_read(MyCommandParser::Argument *args, char *response)
-{
-  start_read_cycle();
-  strcpy(response, "read cycle started");
-}
-
-void cmd_end_read(MyCommandParser::Argument *args, char *response)
-{
-  end_read_cycle();
-  strcpy(response, "read cycle finished");
 }
 
 void cmd_read(MyCommandParser::Argument *args, char *response)
 {
   cmd_address = args[0].asUInt64;
   read_byte(cmd_address);
-  sprintf(response, "%x: %x", cmd_address, parse_data_bits());
+  sprintf(response, "%x", parse_data_bits());
 }
 
-void cmd_echo(MyCommandParser::Argument *args, char *response)
-{
-  strcpy(response, args[0].asString);
-}
-
-void cmd_write_byte(MyCommandParser::Argument *args, char *response)
+void cmd_program_byte(MyCommandParser::Argument *args, char *response)
 {
   cmd_address = args[0].asUInt64;
   cmd_data = args[1].asUInt64;
   write_byte(cmd_address, cmd_data);
   sprintf(response, "%x: %x", cmd_address, cmd_data);
-}
-
-void cmd_begin_program(MyCommandParser::Argument *args, char *response)
-{
-  start_program_cycle();
-  strcpy(response, "program cycle started");
-}
-
-void cmd_end_program(MyCommandParser::Argument *args, char *response)
-{
-  end_program_cycle();
-  strcpy(response, "program cycle finished");
 }
 
 void setup()
@@ -596,17 +697,14 @@ void setup()
   delay(1);
   Serial.begin(SERIAL_BAUD_RATE);
   Serial.println(VERSION_STRING);
-  Serial.println("rtr");
+  Serial.println(DEVICE_READY_MESSAGE);
+  parser.registerCommand("m", "u", cmd_set_mode);
   parser.registerCommand("r", "u", cmd_read);
-  parser.registerCommand("br", "", cmd_begin_read);
-  parser.registerCommand("er", "", cmd_end_read);
-  parser.registerCommand("echo", "s", cmd_echo);
-
-  parser.registerCommand("p", "uu", cmd_write_byte);
   parser.registerCommand("e", "", cmd_erase);
-  parser.registerCommand("bp", "", cmd_begin_program);
-  parser.registerCommand("ep", "", cmd_end_program);
   parser.registerCommand("wp", "u", cmd_program_test_pattern);
+  parser.registerCommand("pb", "uu", cmd_program_block);
+  parser.registerCommand("p", "uu", cmd_program_byte);
+  parser.registerCommand("dc", "uu", cmd_dump_contents);
 }
 
 void loop()
@@ -632,7 +730,7 @@ void loop()
     }
     else if (serial_input_buffer_index == 64 or serial_input_buffer[serial_input_buffer_index] == 3)
     {
-      Serial.println("Command cancelled");
+      Serial.println(NACK_MESSAGE);
       serial_input_buffer_index = 0;
     }
     else

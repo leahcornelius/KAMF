@@ -4,22 +4,19 @@
 ;
 ;  Test program for the mc6802-based Cornputor 
 ;  Intended for the SBASM assembler - uses macros specific to this!
-;  This will blink and LED on PIA PB0 -> PB6.
-;  The string "Lo and behold" is stored at memory location $0900
-;  this serves only as a "why the fuck not" - plus makes it easier to see 
-;  if the hex file is correctly flashed. 
+;  This will blink LEDs attached to PIA PB0 -> PB6
 ;  
-;  The program starts at address $F800 (CPU's perspective) but should fill the 
-;  Entire 2KiB RAM (used as ROM, reporgramed after each power cycle) 
+;  The program starts at address $8000 (CPU's perspective) but should fill the 
+;  Entire 32kb ROM (up to 0xFFFF)
 ;
 ;  Author: Leah Cornelius @ Cornelius Innovations 
 ;  Date: 2/05/2023
 ;
 ;------------------------------------------------------------------------
-
+             .LI    OFF                 ; Dont print the assembly to console when assembling
              .CR    6800                ; Select cross overlay (Motorola 6802)
-             .OR    $F800               ; The program will start at address $F800 
-             .TF    test.hex,INT        ; Set intel hex output (this can be used on non intel processors)
+             .OR    $8000               ; The program will start at address $8000 
+             .TF    corn8.bin, BIN        ; Set raw binary output
 
 ;------------------------------------------------------------------------
 ;  Declaration of constants
@@ -29,10 +26,9 @@ PIA_A           .EQ     $0080           ; Pia data register A
 PIA_B           .EQ     $0081           ; Pia data register B 
 CON_A           .EQ     $0082           ; Pia control register A
 CON_B           .EQ     $0083           ; Pia control register B
-BLINK_TIMER     .EQ     $0084           ; Blink timer
-
-HELLO           .EQ     $0900
-                .DB     "Lo and behold",0
+TIMER_HIGH      .EQ     $0000          ; Blink timer (high byte)
+TIMER_LOW       .EQ     $0001          ; Blink timer (low byte)
+PORT_B_PATTERN  .EQ     $0005          ; Pattern for port B
 
 ;------------------------------------------------------------------------
 ;  Reset and initialisation
@@ -42,7 +38,7 @@ RESET           LDS     #$007F          ; Reset stack pointer
                 LDAA    #%0000.0100     ; Initialise PIA ports
                 STAA    CON_A
                 STAA    CON_B
-                LDAA    #%0111.1111     ; b0..b6 are outputs b7 is input
+                LDAA    #%1111.1111     ; All pins are outputs
                 STAA    PIA_A           ;  for both PIA ports
                 STAA    PIA_B
                 CLRB
@@ -53,139 +49,59 @@ RESET           LDS     #$007F          ; Reset stack pointer
                 LDAA    #%0000.0100     ; Select data registers again
                 STAA    CON_A
                 STAA    CON_B
-                LDAA    #200              ; Initialise blink timer
-                STAA    BLINK_TIMER
+                LDAA    #%1111.1111     
+                STAA    PORT_B_PATTERN ; Led pattern for port B
+                CLRA
+                CLRB
+
 
 ;------------------------------------------------------------------------
 ;  Main program loop
 ;------------------------------------------------------------------------
 
-MAIN            BSR     BLINK_LEDS      ;     Blink LEDS
-                CLRB                    ; In case push button A not down
-                
-                DEC     BLINK_TIMER     ; Decrement counter
-                BPL     .WAIT_TIME      
-                LDAA    #200              ; Restart counter
-                STAA    BLINK_TIMER
-.WAIT_TIME      NOP                     ; Wait for some time
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
-                NOP
+MAIN            BSR     REFRESH_LEDS    ; Show pattern on LEDS
+                BSR     .SETUP_DELAY
+                BSR     DELAY           ; Wait for ~1 s
+                BSR     UPDATE_PATTERN  ; Update the in memory pattern to be sent to LEDs
+                BRA     MAIN            ; Loop forever
+
+.SETUP_DELAY    LDAA #%1111.1111        ; ~1s delay
+                LDAB #%1111.1111 
+                RTS
+;------------------------------------------------------------------------
+; Delay subroutine
+; Uses two bytes, set to the values of accumulators A & B (high and low)
+; Max delay is ~1s (A and B set to 0xFF), must set the content of accumulators
+; Before starting this subroutine
+;------------------------------------------------------------------------
+DELAY           STAA    TIMER_HIGH         ; Set the specified delay (high)
+                STAB    TIMER_LOW          ;                         (low)
+                BSR     .HIGH_LOOP          ; Perform iterations
+                RTS
+
+.LOW_LOOP       DEC     TIMER_LOW           ; Decrement low byte
+                BNE     .LOW_LOOP           ; Repeat until low byte is 0
+                RTS                     
+
+.HIGH_LOOP      STAB TIMER_LOW          ; Reset low byte
+                BSR .LOW_LOOP           ; Complete 1 low byte iteration
+                DEC TIMER_HIGH          ; Decrement high byte
+                BNE .HIGH_LOOP          ; Repeat until high byte is 0
                 RTS
 
 ;------------------------------------------------------------------------
 ;  Blink LEDs on PIA port B (PB0 -> PB6)
 ;------------------------------------------------------------------------
 
-BLINK_LEDS     LDAA    PIA_B            ; Get current LED pattern
+UPDATE_PATTERN  LDAA    PORT_B_PATTERN            ; Get current LED pattern
                 EORA    #%1111.1111     ; Toggle all bits
-                STAA    PIA_B           ; and show it
+                STAA    PORT_B_PATTERN
                 RTS
+
+REFRESH_LEDS    LDAA    PORT_B_PATTERN
+                STAA    PIA_B           ; Send to PIA
+                RTS
+
 
 ;------------------------------------------------------------------------
 ;  Interrupt and reset vectors
@@ -196,5 +112,3 @@ BLINK_LEDS     LDAA    PIA_B            ; Get current LED pattern
                 .DA     RESET           ;SWI (Not used)
                 .DA     RESET           ;NMI (Not used)
                 .DA     RESET           ;Reset
-
-                .LI     OFF
