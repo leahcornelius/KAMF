@@ -314,11 +314,13 @@ def program_device(start_address, end_address, filename):
     print("Comparing read-back to original file...")
     with open(filename, 'rb') as f:
         original_bytes = f.read()
+    
+    clear_serial_buffer()
 
     if original_bytes == read_back_bytes:
         print_color(
             "Read-back matches original file, device programmed successfully!", 'g')
-
+        return True
     else:
         sha1_original = hashlib.sha1(original_bytes).hexdigest()
         sha1_read_back = hashlib.sha1(read_back_bytes).hexdigest()
@@ -329,8 +331,9 @@ def program_device(start_address, end_address, filename):
         print("Length original: {}, Length read-back: {}".format(
             len(original_bytes), len(read_back_bytes)))
         print("SHA1 original: {}, SHA1 read-back: {}".format(sha1_original, sha1_read_back))
+        return False
 
-    clear_serial_buffer()
+
 
 
 def main():
@@ -420,8 +423,11 @@ def main():
         print_color("Erasing device, assuming 14v is applied to Vpp pin", 'y')
         if erase_device() == False:
             print_color("ERROR: Erase failed, exiting...", 'r')
+            os.system("spd-say 'Erase failed, check console'")
             sys.exit(1)
         print_color("Erase complete", 'g')
+        os.system("spd-say 'Erase complete'")
+
         if not write_mode:
             sys.exit(0)
 
@@ -434,16 +440,13 @@ def main():
             print_color(
                 "ERROR: No start address specified for write operation, exiting...", 'r')
             sys.exit(1)
-        if erase_mode:
-            # We need to wait for the user to set the voltage back to 12v for programing, as we just erased the device (which requires 14v)
-            # We will play a beep and use "say" to tell the user to set the voltage back to 12v
-            print_color(
-                "Please set the voltage back to 12v for programming", 'y')
-            os.system("spd-say 'Erase complete. Set voltage to 12 volts'")
-            input("Press enter to continue (after Vpp set to 12v)...")
-
-        program_device(start_address, end_address, to_write_filename)
+        
+        if program_device(start_address, end_address, to_write_filename) == False:
+            print_color("ERROR: Write failed, exiting...", 'r')
+            os.system("spd-say 'Write failed, check console'")
+            sys.exit(1)
         print_color("Write complete", 'g')
+        os.system("spd-say 'Write complete'")
         sys.exit(0)
 
     # Loop until user exits
